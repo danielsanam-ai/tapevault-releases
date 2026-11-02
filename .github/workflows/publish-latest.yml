@@ -1,0 +1,49 @@
+name: publish-latest
+# 릴리스가 게시(published)되면 그 릴리스의 latest.json 을 GitHub Pages 로 공개한다.
+# 홈페이지는 https://danielsanam-ai.github.io/tapevault-releases/latest.json 을 읽는다 (CORS 허용, 호출 횟수 제한 없음).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 최신 게시 릴리스의 latest.json 가져오기 (초안·프리릴리스 제외)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir site
+          tag=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName')
+          [ -n "$tag" ] || { echo "게시된 릴리스가 없습니다"; exit 1; }
+          gh release download "$tag" --pattern latest.json --dir site
+          python3 - <<'PY'
+          import json
+          d = json.load(open("site/latest.json", encoding="utf-8"))
+          assert d.get("schema") == 1 and d.get("version") and d.get("platforms"), "latest.json 형식 오류"
+          for k, p in d["platforms"].items():
+              assert p["url"].startswith("https://github.com/danielsanam-ai/tapevault-releases/releases/download/"), k
+              assert len(p["sha256"]) == 64, k
+          print("OK", d["version"], list(d["platforms"]))
+          PY
+          echo '{}' > site/.nojekyll
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
